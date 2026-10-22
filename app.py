@@ -132,7 +132,6 @@ st.sidebar.header("⚙️ Configuración Fiscal")
 
 tasa_detectada = obtener_tasa_bcv_automatica()
 
-# Tasa BCV editable directamente desde la barra lateral
 tasa_bcv = st.sidebar.number_input(
     "Tasa BCV (Bs. / USD):",
     min_value=0.0,
@@ -185,7 +184,6 @@ with pestanas[0]:
           "Monto Total", min_value=0.0, step=0.01
       )
       fecha = st.date_input("Fecha", datetime.date.today())
-      # Hereda el valor configurado en la barra lateral
       tasa_operacion = st.number_input(
           "Tasa BCV Operación:", min_value=0.0, value=tasa_bcv, step=0.01
       )
@@ -208,14 +206,37 @@ with pestanas[0]:
       ]
       categoria = st.selectbox("Rubro / Categoría", categorias)
 
-      if "Médicos" in categoria and tipo_contribuyente == "Persona Natural":
-        es_deducible_base = True
-      elif "Alimentos" in categoria or "Personales" in categoria:
-        es_deducible_base = False
+      # --- DETERMINACIÓN AUTOMÁTICA DE DEDUCIBILIDAD (LEY ISLR) ---
+      if tipo == "Ingreso":
+        status_deducible = "No Aplica (Es un Ingreso)"
+        es_deducible_bool = False
       else:
-        es_deducible_base = True if tipo == "Gasto" else False
+        if (
+            "Alimentos" in categoria
+            or "Personales" in categoria
+            or "Préstamos" in categoria
+        ):
+          status_deducible = "No Deducible (Gasto Personal o no vinculado)"
+          es_deducible_bool = False
+        elif "Médicos" in categoria:
+          if tipo_contribuyente == "Persona Natural":
+            status_deducible = "Deducible (Vía Desgravamen / Salud)"
+            es_deducible_bool = True
+          else:
+            status_deducible = (
+                "No Deducible (Para Persona Jurídica requiere condiciones"
+                " especiales)"
+            )
+            es_deducible_bool = False
+        else:
+          status_deducible = "Deducible (Gasto Necesario - Art. 27 LISLR)"
+          es_deducible_bool = True
 
-      es_deducible = st.checkbox("¿Es deducible ISLR?", value=es_deducible_base)
+      if es_deducible_bool:
+        st.success(f"⚖️ **Criterio ISLR:** {status_deducible}")
+      else:
+        st.warning(f"⚖️ **Criterio ISLR:** {status_deducible}")
+
       nro_factura = st.text_input("N° Factura / Ref")
       nro_control = st.text_input("N° Control (SENIAT)")
 
@@ -240,7 +261,7 @@ with pestanas[0]:
       monto_deducible_calculado = (
           (base_imponible if aplica_iva != "Exento (0%)" else monto_ves)
           * factor_deduccion
-          if (es_deducible and tipo == "Gasto")
+          if (es_deducible_bool and tipo == "Gasto")
           else 0.0
       )
 
@@ -257,7 +278,7 @@ with pestanas[0]:
               concepto if concepto else "Sin concepto",
               categoria,
               tasa_operacion,
-              "Sí" if es_deducible else "No",
+              "Sí" if es_deducible_bool else "No",
               divisa,
               monto,
               round(monto_ves, 2),
