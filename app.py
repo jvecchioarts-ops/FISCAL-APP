@@ -172,13 +172,18 @@ BANCOS_VENEZUELA = [
 # ---------------------------------------------------------
 with pestanas[0]:
   st.subheader("Registrar Nuevo Movimiento")
+
+  # Sacamos el tipo de movimiento fuera del form para que actualice la vista al instante
+  col_tipo_ext, _ = st.columns(2)
+  with col_tipo_ext:
+    tipo = st.selectbox("Tipo de Movimiento", ["Ingreso", "Gasto"])
+
   with st.form("form_transaccion", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
       banco_seleccionado = st.selectbox(
           "🏦 Banco / Cuenta", BANCOS_VENEZUELA
       )
-      tipo = st.selectbox("Tipo de Movimiento", ["Ingreso", "Gasto"])
       divisa = st.selectbox("Moneda", ["USD", "VES"])
       monto = st.number_input(
           "Monto Total", min_value=0.0, step=0.01
