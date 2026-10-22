@@ -6,41 +6,36 @@ import requests
 import sqlite3
 import streamlit as st
 
+# --- CONFIGURACIÓN DE PÁGINA E ÍCONO EN PESTAÑA ---
 st.set_page_config(
-    page_title="Control Fiscal Venezuela - Gastos e Ingresos", layout="wide"
-)
-
-st.title("🇻🇪 Control Financiero Multibanco y Base de Datos - Venezuela")
-st.write(
-    "Tus registros se guardan automáticamente de forma permanente. Gestiona ISLR, IVA, IGTF y conciliaciones."
+    page_title="FISCAL APP - Gestiona tus Finanzas Fácilmente",
+    page_icon="logo.jpg",  # Toma el ícono para la pestaña del navegador/PWA
+    layout="wide",
 )
 
 
-# --- CONFIGURACIÓN DE LA BASE DE DATOS SQLITE ---
+# --- BASE DE DATOS Y ESTADO DE BLOQUEO ---
 def init_db():
   conn = sqlite3.connect("control_fiscal.db", check_same_thread=False)
   cursor = conn.cursor()
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS transacciones (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fecha TEXT,
-            banco TEXT,
-            tipo TEXT,
-            concepto TEXT,
-            categoria TEXT,
-            tasa_bcv REAL,
-            deducible_islr TEXT,
-            divisa TEXT,
-            monto_original REAL,
-            monto_ves REAL,
-            monto_usd REAL,
-            iva_ves REAL,
-            igtf_ves REAL,
-            monto_deducible_ves REAL,
-            factura_ref TEXT,
-            control TEXT
+            fecha TEXT, banco TEXT, tipo TEXT, concepto TEXT, categoria TEXT,
+            tasa_bcv REAL, deducible_islr TEXT, divisa TEXT, monto_original REAL,
+            monto_ves REAL, monto_usd REAL, iva_ves REAL, igtf_ves REAL,
+            monto_deducible_ves REAL, factura_ref TEXT, control TEXT
         )
     """)
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS estado_demo (
+            id INTEGER PRIMARY KEY,
+            bloqueado INTEGER
+        )
+    """)
+  cursor.execute(
+      "INSERT OR IGNORE INTO estado_demo (id, bloqueado) VALUES (1, 0)"
+  )
   conn.commit()
   return conn
 
@@ -48,14 +43,60 @@ def init_db():
 conn = init_db()
 
 
+def esta_bloqueada():
+  cursor = conn.cursor()
+  cursor.execute("SELECT bloqueado FROM estado_demo WHERE id = 1")
+  res = cursor.fetchone()
+  return res[0] == 1 if res else False
+
+
+def bloquear_app():
+  cursor = conn.cursor()
+  cursor.execute("UPDATE estado_demo SET bloqueado = 1 WHERE id = 1")
+  conn.commit()
+
+
+# --- SI LA APP ESTÁ BLOQUEADA ---
+if esta_bloqueada():
+  st.error("🔒 **EL PERIODO DE PRUEBA HA FINALIZADO**")
+  st.info(
+      "Esta versión de prueba ha completado su ciclo tras el cierre y exportación"
+      " del ejercicio."
+  )
+  st.markdown("""
+    ### 🚀 Gracias por probar FISCAL APP
+    * **Gestión Financiera y Control Fiscal en Venezuela**
+    
+    Para reactivar la aplicación, solicitar licencias multiusuario o personalizar la plataforma para tu empresa, ponte en contacto con el desarrollador.
+    """)
+  st.stop()
+
+# --- CABECERA PRINCIPAL CON LOGO Y TÍTULO ---
+col_logo, col_titulo = st.columns([1, 4])
+
+with col_logo:
+  try:
+    st.image("logo.jpg", width=130)
+  except Exception:
+    st.title("🇻🇪")
+
+with col_titulo:
+  st.title("FISCAL APP")
+  st.subheader('"Gestiona tus Finanzas Fácilmente"')
+
+st.caption(
+    "Control financiero multibanco, gestión de ISLR/IVA/IGTF y conciliación"
+    " bancaria bajo normativas SENIAT."
+)
+st.divider()
+
+
 @st.cache_data(ttl=600)
 def obtener_tasa_bcv_automatica():
-  """Obtiene la tasa oficial actual del BCV con múltiples respaldos."""
   try:
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            " (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
         )
     }
     response = requests.get(
@@ -80,31 +121,17 @@ def obtener_tasa_bcv_automatica():
   except Exception:
     pass
 
-  try:
-    r = requests.get(
-        "https://pydolarvenezuela-api.vercel.app/api/v1/dollar?monitor=bcv",
-        timeout=5,
-    )
-    if r.status_code == 200:
-      return float(r.json()["monitors"]["bcv"]["price"])
-  except Exception:
-    pass
-
   return 36.50
 
 
 requests.packages.urllib3.disable_warnings()
 
-# Barra lateral informativa de referencia actual
+# --- BARRA LATERAL ---
+st.sidebar.image("logo.jpg", use_container_width=True)
 st.sidebar.header("⚙️ Configuración Fiscal")
-st.sidebar.markdown(
-    "🔗 [Consultar Tasa Oficial en el BCV](https://www.bcv.org.ve/)",
-    unsafe_allow_html=True,
-)
-
 tasa_detectada = obtener_tasa_bcv_automatica()
 st.sidebar.metric(
-    label="Tasa BCV del Día (Referencia)", value=f"Bs. {tasa_detectada:,.2f}"
+    label="Tasa BCV del Día", value=f"Bs. {tasa_detectada:,.2f}"
 )
 
 rif_usuario = st.sidebar.text_input("Tu RIF / Cédula:", value="J-12345678-9")
@@ -112,7 +139,7 @@ tipo_contribuyente = st.sidebar.selectbox(
     "Tipo de Contribuyente", ["Persona Natural", "Persona Jurídica"]
 )
 porcentaje_vehiculo = st.sidebar.slider(
-    "🚗 % Deducible para Mantenimiento de Vehículo", 0, 100, 75
+    "🚗 % Deducible Vehículo", 0, 100, 75
 )
 
 pestanas = st.tabs([
@@ -135,40 +162,26 @@ BANCOS_VENEZUELA = [
 ]
 
 # ---------------------------------------------------------
-# PESTAÑA 1: REGISTRO DIARIO (GUARDADO EN SQLITE)
+# PESTAÑA 1: REGISTRO DIARIO
 # ---------------------------------------------------------
 with pestanas[0]:
   st.subheader("Registrar Nuevo Movimiento")
-
   with st.form("form_transaccion", clear_on_submit=True):
     col1, col2 = st.columns(2)
-
     with col1:
       banco_seleccionado = st.selectbox(
-          "🏦 Banco / Cuenta de Origen o Destino", BANCOS_VENEZUELA
+          "🏦 Banco / Cuenta", BANCOS_VENEZUELA
       )
       tipo = st.selectbox("Tipo de Movimiento", ["Ingreso", "Gasto"])
-      divisa = st.selectbox("Moneda de la Operación", ["USD", "VES"])
+      divisa = st.selectbox("Moneda", ["USD", "VES"])
       monto = st.number_input(
-          "Monto Total de la Operación", min_value=0.0, step=0.01
+          "Monto Total", min_value=0.0, step=0.01
       )
-      fecha = st.date_input("Fecha de la Transacción", datetime.date.today())
-
+      fecha = st.date_input("Fecha", datetime.date.today())
       tasa_operacion = st.number_input(
-          "Tasa BCV aplicada a esta operación:",
-          min_value=0.0,
-          value=tasa_detectada,
-          step=0.01,
-          help=(
-              "Ajusta este valor si la transacción corresponde a una fecha"
-              " anterior con otra tasa oficial."
-          ),
+          "Tasa BCV Operación:", min_value=0.0, value=tasa_detectada, step=0.01
       )
-
-      concepto = st.text_input(
-          "Concepto / Descripción",
-          placeholder="Ej: Mercado semanal, Factura de proveedor, Almuerzo",
-      )
+      concepto = st.text_input("Concepto / Descripción")
 
     with col2:
       categorias = [
@@ -194,31 +207,25 @@ with pestanas[0]:
       else:
         es_deducible_base = True if tipo == "Gasto" else False
 
-      es_deducible = st.checkbox(
-          "¿Es gasto deducible para el ISLR?", value=es_deducible_base
-      )
-      nro_factura = st.text_input("Número de Factura / Referencia")
-      nro_control = st.text_input("Número de Control (SENIAT)")
+      es_deducible = st.checkbox("¿Es deducible ISLR?", value=es_deducible_base)
+      nro_factura = st.text_input("N° Factura / Ref")
+      nro_control = st.text_input("N° Control (SENIAT)")
 
     col3, col4 = st.columns(2)
     with col3:
       aplica_iva = st.selectbox("Aplica IVA", ["Exento (0%)", "General (16%)"])
     with col4:
-      aplica_igtf = st.checkbox(
-          "¿Aplica IGTF (3% por pago en divisas/efectivo)?", value=False
-      )
+      aplica_igtf = st.checkbox("¿Aplica IGTF (3%)?", value=False)
 
     submitted = st.form_submit_button("Guardar Movimiento")
 
     if submitted:
       monto_ves = monto if divisa == "VES" else monto * tasa_operacion
       monto_usd = monto / tasa_operacion if divisa == "VES" else monto
-
       iva_porcentaje = 0.16 if aplica_iva == "General (16%)" else 0.0
       base_imponible = monto_ves / (1 + iva_porcentaje)
       monto_iva = monto_ves - base_imponible
       igtf_monto = monto_ves * 0.03 if aplica_igtf else 0.0
-
       factor_deduccion = (
           (porcentaje_vehiculo / 100.0) if "Vehículo" in categoria else 1.0
       )
@@ -229,7 +236,6 @@ with pestanas[0]:
           else 0.0
       )
 
-      # Inserción directa en la base de datos SQLite
       cursor = conn.cursor()
       cursor.execute(
           """
@@ -256,7 +262,7 @@ with pestanas[0]:
           ),
       )
       conn.commit()
-      st.success("¡Movimiento guardado permanentemente en la base de datos!")
+      st.success("¡Movimiento registrado con éxito!")
 
 # ---------------------------------------------------------
 # PESTAÑA 2: GESTIONAR REGISTROS
@@ -275,7 +281,6 @@ with pestanas[1]:
       df_gestion = df_gestion[df_gestion["banco"] == banco_filtro]
 
     st.dataframe(df_gestion, use_container_width=True)
-
     st.divider()
     col_edit, col_del = st.columns(2)
 
@@ -289,7 +294,6 @@ with pestanas[1]:
         confirmar_borrado = st.checkbox(
             f"⚠️ Confirmar eliminación permanente del ID #{id_a_eliminar}"
         )
-
         if st.button("🔴 Eliminar Registro", type="primary"):
           if confirmar_borrado:
             cursor = conn.cursor()
@@ -299,8 +303,6 @@ with pestanas[1]:
             conn.commit()
             st.success(f"Registro #{id_a_eliminar} eliminado.")
             st.rerun()
-          else:
-            st.warning("Marca la casilla de confirmación.")
 
     with col_edit:
       st.write("### ✏️ Modificar Registro")
@@ -309,7 +311,6 @@ with pestanas[1]:
             "Selecciona el ID a modificar:", ids_disponibles, key="edit_select"
         )
         reg_actual = df_gestion[df_gestion["id"] == id_a_editar].iloc[0]
-
         nuevo_banco = st.selectbox(
             "Nuevo Banco:",
             BANCOS_VENEZUELA,
@@ -328,7 +329,6 @@ with pestanas[1]:
         nueva_tasa = st.number_input(
             "Tasa BCV:", value=float(reg_actual["tasa_bcv"]), min_value=0.0
         )
-
         confirmar_edicion = st.checkbox(
             f"⚠️ Confirmar cambios sobre ID #{id_a_editar}"
         )
@@ -345,7 +345,6 @@ with pestanas[1]:
                 if reg_actual["divisa"] == "VES"
                 else nuevo_monto
             )
-
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -366,17 +365,14 @@ with pestanas[1]:
             conn.commit()
             st.success(f"Registro #{id_a_editar} actualizado.")
             st.rerun()
-          else:
-            st.warning("Marca la casilla de confirmación.")
 
 # ---------------------------------------------------------
 # PESTAÑA 3: CONCILIACIÓN BANCARIA
 # ---------------------------------------------------------
 with pestanas[2]:
-  st.subheader("Conciliación Bancaria por Banco Específico")
-
+  st.subheader("Conciliación Bancaria")
   banco_conciliar = st.selectbox(
-      "Selecciona el Banco a Conciliar:", BANCOS_VENEZUELA
+      "Selecciona el Banco:", BANCOS_VENEZUELA
   )
   archivo_banco = st.file_uploader(
       f"Cargar Estado de Cuenta de {banco_conciliar} (.xlsx, .csv)",
@@ -405,7 +401,7 @@ with pestanas[2]:
       st.error(f"Error al leer el archivo: {e}")
 
 # ---------------------------------------------------------
-# PESTAÑA 4: CIERRE Y REPORTES
+# PESTAÑA 4: CIERRE, REPORTES Y BLOQUEO AUTOMÁTICO
 # ---------------------------------------------------------
 with pestanas[3]:
   st.subheader("Consolidado Fiscal y Cierre General")
@@ -437,7 +433,13 @@ with pestanas[3]:
       df.to_excel(writer, index=False, sheet_name="Cierre_Fiscal")
     excel_data = output.getvalue()
 
-    st.download_button(
+    st.divider()
+    st.warning(
+        "⚠️ **Atención:** Al hacer clic en descargar, la versión de evaluación"
+        " se dará por completada y se bloqueará."
+    )
+
+    btn_descargar = st.download_button(
         label="📥 Descargar Reporte Completo en Excel (.xlsx)",
         data=excel_data,
         file_name=(
@@ -447,5 +449,11 @@ with pestanas[3]:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
     )
+
+    if btn_descargar:
+      bloquear_app()
+      st.success("Reporte generado. La aplicación de prueba se ha bloqueado.")
+      st.rerun()
+
   else:
     st.info("Registra al menos un movimiento para ver el consolidado fiscal.")
