@@ -1,5 +1,6 @@
 import datetime
 import io
+import bs4
 import pandas as pd
 import requests
 import streamlit as st
@@ -10,36 +11,67 @@ st.set_page_config(
 
 st.title("🇻🇪 Control Financiero Multibanco y Conciliación - Venezuela")
 st.write(
-    "Registra transacciones por banco, gestiona ISLR/IVA/IGTF y realiza conciliaciones independientes."
+    "Registra transacciones con su tasa histórica, gestiona ISLR/IVA/IGTF y realiza conciliaciones independientes."
 )
 
 
-@st.cache_data(ttl=3600)
-def obtener_tasa_bcv_actual():
+@st.cache_data(ttl=600)
+def obtener_tasa_bcv_automatica():
+  """Obtiene la tasa oficial actual del BCV con múltiples respaldos."""
   try:
-    url = "https://pydolarvenezuela-api.vercel.app/api/v1/dollar?monitor=bcv"
-    response = requests.get(url, timeout=5)
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+        )
+    }
+    response = requests.get(
+        "https://www.bcv.org.ve/", headers=headers, timeout=6, verify=False
+    )
     if response.status_code == 200:
-      data = response.json()
-      return float(data["monitors"]["bcv"]["price"])
+      soup = bs4.BeautifulSoup(response.text, "html.parser")
+      div_dolar = soup.find("div", id="dolar")
+      if div_dolar:
+        texto_tasa = div_dolar.find("strong").text.strip()
+        tasa_limpia = (
+            texto_tasa.replace(".", "").replace(",", ".").strip()
+        )
+        return float(tasa_limpia)
   except Exception:
     pass
+
+  try:
+    r = requests.get("https://ve.dolarapi.com/v1/dolares/oficial", timeout=5)
+    if r.status_code == 200:
+      return float(r.json()["promedio"])
+  except Exception:
+    pass
+
+  try:
+    r = requests.get(
+        "https://pydolarvenezuela-api.vercel.app/api/v1/dollar?monitor=bcv",
+        timeout=5,
+    )
+    if r.status_code == 200:
+      return float(r.json()["monitors"]["bcv"]["price"])
+  except Exception:
+    pass
+
   return 36.50
 
 
-# Sidebar Config
+requests.packages.urllib3.disable_warnings()
+
+# Barra lateral informativa de referencia actual
 st.sidebar.header("⚙️ Configuración Fiscal")
 st.sidebar.markdown(
     "🔗 [Consultar Tasa Oficial en el BCV](https://www.bcv.org.ve/)",
     unsafe_allow_html=True,
 )
 
-tasa_automatica = obtener_tasa_bcv_actual()
-tasa_bcv = st.sidebar.number_input(
-    "Tasa Oficial BCV (VES/USD):",
-    min_value=0.0,
-    value=tasa_automatica,
-    step=0.01,
+tasa_detectada = obtener_tasa_bcv_automatica()
+st.sidebar.metric(
+    label="Tasa BCV del Día (Referencia)", value=f"Bs. {tasa_detectada:,.2f}"
 )
 
 rif_usuario = st.sidebar.text_input("Tu RIF / Cédula:", value="J-12345678-9")
@@ -60,7 +92,6 @@ pestanas = st.tabs([
     "📊 Cierre y Reportes",
 ])
 
-# Lista de bancos soportados
 BANCOS_VENEZUELA = [
     "Banco de Venezuela (BDV)",
     "Banesco Banco Universal",
@@ -74,7 +105,7 @@ BANCOS_VENEZUELA = [
 ]
 
 # ---------------------------------------------------------
-# PESTAÑA 1: REGISTRO DIARIO (MULTIBANCO)
+# PESTAÑA 1: REGISTRO DIARIO (CON TASA HISTÓRICA)
 # ---------------------------------------------------------
 with pestanas[0]:
   st.subheader("Registrar Nuevo Movimiento")
@@ -92,9 +123,22 @@ with pestanas[0]:
           "Monto Total de la Operación", min_value=0.0, step=0.01
       )
       fecha = st.date_input("Fecha de la Transacción", datetime.date.today())
+
+      # Tasa específica para esta operación (por defecto la de hoy, ajustable si es de días pasados)
+      tasa_operacion = st.number_input(
+          "Tasa BCV aplicada a esta operación:",
+          min_value=0.0,
+          value=tasa_detectada,
+          step=0.01,
+          help=(
+              "Ajusta este valor si la transacción corresponde a una fecha"
+              " anterior con otra tasa oficial."
+          ),
+      )
+
       concepto = st.text_input(
           "Concepto / Descripción",
-          placeholder="Ej: Pago de proveedor, Transferencia recibida, Almuerzo",
+          placeholder="Ej: Mercado semanal, Factura de proveedor, Almuerzo",
       )
 
     with col2:
@@ -138,8 +182,9 @@ with pestanas[0]:
     submitted = st.form_submit_button("Guardar Movimiento")
 
     if submitted:
-      monto_ves = monto if divisa == "VES" else monto * tasa_bcv
-      monto_usd = monto / tasa_bcv if divisa == "VES" else monto
+      # Cálculos usando la tasa específica de la fecha de la transacción
+      monto_ves = monto if divisa == "VES" else monto * tasa_operacion
+      monto_usd = monto / tasa_operacion if divisa == "VES" else monto
 
       iva_porcentaje = 0.16 if aplica_iva == "General (16%)" else 0.0
       base_imponible = monto_ves / (1 + iva_porcentaje)
@@ -163,6 +208,7 @@ with pestanas[0]:
           "Tipo": tipo,
           "Concepto": concepto if concepto else "Sin concepto",
           "Categoría": categoria,
+          "Tasa BCV": tasa_operacion,
           "Deducible ISLR": "Sí" if es_deducible else "No",
           "Divisa": divisa,
           "Monto Original": monto,
@@ -176,7 +222,7 @@ with pestanas[0]:
       }
 
       st.session_state.transacciones.append(nueva_transaccion)
-      st.success("¡Movimiento registrado con éxito!")
+      st.success("¡Movimiento registrado con éxito a su tasa histórica!")
 
 # ---------------------------------------------------------
 # PESTAÑA 2: GESTIONAR REGISTROS
@@ -188,7 +234,6 @@ with pestanas[1]:
   else:
     df_gestion = pd.DataFrame(st.session_state.transacciones)
 
-    # Filtro opcional por Banco
     banco_filtro = st.selectbox(
         "Filtrar lista por Banco:", ["Todos"] + BANCOS_VENEZUELA
     )
@@ -248,6 +293,9 @@ with pestanas[1]:
           value=float(reg_actual["Monto Original"]),
           min_value=0.0,
       )
+      nueva_tasa = st.number_input(
+          "Tasa BCV:", value=float(reg_actual["Tasa BCV"]), min_value=0.0
+      )
 
       confirmar_edicion = st.checkbox(
           f"⚠️ Confirmar cambios sobre ID #{id_a_editar}"
@@ -258,13 +306,14 @@ with pestanas[1]:
           reg_actual["Banco"] = nuevo_banco
           reg_actual["Concepto"] = nuevo_concepto
           reg_actual["Monto Original"] = nuevo_monto
+          reg_actual["Tasa BCV"] = nueva_tasa
           reg_actual["Monto VES"] = (
               nuevo_monto
               if reg_actual["Divisa"] == "VES"
-              else nuevo_monto * tasa_bcv
+              else nuevo_monto * nueva_tasa
           )
           reg_actual["Monto USD"] = (
-              nuevo_monto / tasa_bcv
+              nuevo_monto / nueva_tasa
               if reg_actual["Divisa"] == "VES"
               else nuevo_monto
           )
@@ -275,10 +324,10 @@ with pestanas[1]:
           st.warning("Marca la casilla de confirmación.")
 
 # ---------------------------------------------------------
-# PESTAÑA 3: CONCILIACIÓN BANCARIA POR BANCO
+# PESTAÑA 3: CONCILIACIÓN BANCARIA
 # ---------------------------------------------------------
 with pestanas[2]:
-  st.subheader("Conciliación Bancaria por Banco Especifico")
+  st.subheader("Conciliación Bancaria por Banco Específico")
 
   banco_conciliar = st.selectbox(
       "Selecciona el Banco a Conciliar:", BANCOS_VENEZUELA
@@ -298,7 +347,6 @@ with pestanas[2]:
       st.write(f"Estado de cuenta cargado de **{banco_conciliar}**:")
       st.dataframe(df_banco.head(), use_container_width=True)
 
-      # Registros guardados para ese banco
       if st.session_state.transacciones:
         df_mis_regs = pd.DataFrame(st.session_state.transacciones)
         df_mis_regs_banco = df_mis_regs[df_mis_regs["Banco"] == banco_conciliar]
