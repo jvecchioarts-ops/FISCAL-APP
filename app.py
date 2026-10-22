@@ -173,11 +173,62 @@ BANCOS_VENEZUELA = [
 with pestanas[0]:
   st.subheader("Registrar Nuevo Movimiento")
 
-  # Sacamos el tipo de movimiento fuera del form para que actualice la vista al instante
-  col_tipo_ext, _ = st.columns(2)
-  with col_tipo_ext:
+  # CAMPOS DE SELECCIÓN DINÁMICA (FUERA DEL FORMULARIO PARA REACCIÓN EN TIEMPO REAL)
+  c_tipo, c_cat = st.columns(2)
+  with c_tipo:
     tipo = st.selectbox("Tipo de Movimiento", ["Ingreso", "Gasto"])
 
+  categorias = [
+      "🛒 Alimentos / Supermercado / Comida",
+      "🏥 Gastos Médicos y Odontológicos",
+      "🏢 Alquiler de Local / Oficina",
+      "💡 Servicios Públicos (Luz, Agua, Telecomunicaciones)",
+      "👨‍💼 Honorarios Profesionales",
+      "📣 Publicidad y Mercadeo",
+      "📦 Inventario / Materia Prima",
+      "🛠️ Mantenimiento y Reparaciones Generales",
+      "🚗 Mantenimiento y Reparaciones de Vehículo",
+      "👤 Gastos Personales (No Deducibles)",
+      "🏦 Préstamos / Financiamiento",
+      "📊 Otros Gastos / Ingresos Operativos",
+  ]
+
+  with c_cat:
+    categoria = st.selectbox("Rubro / Categoría", categorias)
+
+  # --- EVALUACIÓN AUTOMÁTICA EN TIEMPO REAL ---
+  cat_lower = categoria.lower()
+
+  if tipo == "Ingreso":
+    status_deducible = "No Aplica (Es un Ingreso)"
+    es_deducible_bool = False
+  else:
+    if any(
+        kw in cat_lower
+        for kw in ["alimento", "comida", "personal", "préstamo", "prestamo"]
+    ):
+      status_deducible = "No Deducible (Gasto Personal o no vinculado)"
+      es_deducible_bool = False
+    elif any(kw in cat_lower for kw in ["médic", "medic", "odontol"]):
+      if tipo_contribuyente == "Persona Natural":
+        status_deducible = "Deducible (Vía Desgravamen de Salud)"
+        es_deducible_bool = True
+      else:
+        status_deducible = (
+            "No Deducible (Gasto médico personal para PJ no vinculado)"
+        )
+        es_deducible_bool = False
+    else:
+      status_deducible = "Deducible (Gasto Necesario - Art. 27 LISLR)"
+      es_deducible_bool = True
+
+  # MOSTRAR EL VEREDICTO DE FORMA CLARA Y DESTACADA
+  if es_deducible_bool:
+    st.success(f"✅ **Criterio ISLR:** {status_deducible}")
+  else:
+    st.info(f"⚖️ **Criterio ISLR:** {status_deducible}")
+
+  # FORMULARIO PARA INGRESAR VALORES Y GUARDAR
   with st.form("form_transaccion", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
@@ -189,59 +240,12 @@ with pestanas[0]:
           "Monto Total", min_value=0.0, step=0.01
       )
       fecha = st.date_input("Fecha", datetime.date.today())
+
+    with col2:
       tasa_operacion = st.number_input(
           "Tasa BCV Operación:", min_value=0.0, value=tasa_bcv, step=0.01
       )
       concepto = st.text_input("Concepto / Descripción")
-
-    with col2:
-      categorias = [
-          "🛒 Alimentos / Supermercado / Comida",
-          "🏥 Gastos Médicos y Odontológicos",
-          "Alquiler de Local / Oficina",
-          "Servicios Públicos (Luz, Agua, Telecomunicaciones)",
-          "Honorarios Profesionales",
-          "Publicidad y Mercadeo",
-          "Inventario / Materia Prima",
-          "Mantenimiento y Reparaciones Generales",
-          "🚗 Mantenimiento y Reparaciones de Vehículo",
-          "Gastos Personales (No Deducibles)",
-          "Préstamos / Financiamiento",
-          "Otros Gastos / Ingresos Operativos",
-      ]
-      categoria = st.selectbox("Rubro / Categoría", categorias)
-
-      # --- DETERMINACIÓN AUTOMÁTICA DE DEDUCIBILIDAD (LEY ISLR) ---
-      if tipo == "Ingreso":
-        status_deducible = "No Aplica (Es un Ingreso)"
-        es_deducible_bool = False
-      else:
-        if (
-            "Alimentos" in categoria
-            or "Personales" in categoria
-            or "Préstamos" in categoria
-        ):
-          status_deducible = "No Deducible (Gasto Personal o no vinculado)"
-          es_deducible_bool = False
-        elif "Médicos" in categoria:
-          if tipo_contribuyente == "Persona Natural":
-            status_deducible = "Deducible (Vía Desgravamen / Salud)"
-            es_deducible_bool = True
-          else:
-            status_deducible = (
-                "No Deducible (Para Persona Jurídica requiere condiciones"
-                " especiales)"
-            )
-            es_deducible_bool = False
-        else:
-          status_deducible = "Deducible (Gasto Necesario - Art. 27 LISLR)"
-          es_deducible_bool = True
-
-      if es_deducible_bool:
-        st.success(f"⚖️ **Criterio ISLR:** {status_deducible}")
-      else:
-        st.warning(f"⚖️ **Criterio ISLR:** {status_deducible}")
-
       nro_factura = st.text_input("N° Factura / Ref")
       nro_control = st.text_input("N° Control (SENIAT)")
 
@@ -260,8 +264,9 @@ with pestanas[0]:
       base_imponible = monto_ves / (1 + iva_porcentaje)
       monto_iva = monto_ves - base_imponible
       igtf_monto = monto_ves * 0.03 if aplica_igtf else 0.0
+
       factor_deduccion = (
-          (porcentaje_vehiculo / 100.0) if "Vehículo" in categoria else 1.0
+          (porcentaje_vehiculo / 100.0) if "vehículo" in cat_lower else 1.0
       )
       monto_deducible_calculado = (
           (base_imponible if aplica_iva != "Exento (0%)" else monto_ves)
