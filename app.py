@@ -9,7 +9,7 @@ import streamlit as st
 # --- CONFIGURACIÓN DE PÁGINA E ÍCONO EN PESTAÑA ---
 st.set_page_config(
     page_title="FISCAL APP - Gestiona tus Finanzas Fácilmente",
-    page_icon="logo.jpg",  # Toma el ícono para la pestaña del navegador/PWA
+    page_icon="logo.jpg",
     layout="wide",
 )
 
@@ -126,12 +126,19 @@ def obtener_tasa_bcv_automatica():
 
 requests.packages.urllib3.disable_warnings()
 
-# --- BARRA LATERAL ---
+# --- BARRA LATERAL (CONFIGURACIÓN FISCAL Y TASA EDITABLE) ---
 st.sidebar.image("logo.jpg", use_container_width=True)
 st.sidebar.header("⚙️ Configuración Fiscal")
+
 tasa_detectada = obtener_tasa_bcv_automatica()
-st.sidebar.metric(
-    label="Tasa BCV del Día", value=f"Bs. {tasa_detectada:,.2f}"
+
+# Tasa BCV editable directamente desde la barra lateral
+tasa_bcv = st.sidebar.number_input(
+    "Tasa BCV (Bs. / USD):",
+    min_value=0.0,
+    value=float(tasa_detectada),
+    step=0.01,
+    format="%.2f",
 )
 
 rif_usuario = st.sidebar.text_input("Tu RIF / Cédula:", value="J-12345678-9")
@@ -178,8 +185,9 @@ with pestanas[0]:
           "Monto Total", min_value=0.0, step=0.01
       )
       fecha = st.date_input("Fecha", datetime.date.today())
+      # Hereda el valor configurado en la barra lateral
       tasa_operacion = st.number_input(
-          "Tasa BCV Operación:", min_value=0.0, value=tasa_detectada, step=0.01
+          "Tasa BCV Operación:", min_value=0.0, value=tasa_bcv, step=0.01
       )
       concepto = st.text_input("Concepto / Descripción")
 
