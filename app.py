@@ -3,16 +3,49 @@ import io
 import bs4
 import pandas as pd
 import requests
+import sqlite3
 import streamlit as st
 
 st.set_page_config(
     page_title="Control Fiscal Venezuela - Gastos e Ingresos", layout="wide"
 )
 
-st.title("🇻🇪 Control Financiero Multibanco y Conciliación - Venezuela")
+st.title("🇻🇪 Control Financiero Multibanco y Base de Datos - Venezuela")
 st.write(
-    "Registra transacciones con su tasa histórica, gestiona ISLR/IVA/IGTF y realiza conciliaciones independientes."
+    "Tus registros se guardan automáticamente de forma permanente. Gestiona ISLR, IVA, IGTF y conciliaciones."
 )
+
+
+# --- CONFIGURACIÓN DE LA BASE DE DATOS SQLITE ---
+def init_db():
+  conn = sqlite3.connect("control_fiscal.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS transacciones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha TEXT,
+            banco TEXT,
+            tipo TEXT,
+            concepto TEXT,
+            categoria TEXT,
+            tasa_bcv REAL,
+            deducible_islr TEXT,
+            divisa TEXT,
+            monto_original REAL,
+            monto_ves REAL,
+            monto_usd REAL,
+            iva_ves REAL,
+            igtf_ves REAL,
+            monto_deducible_ves REAL,
+            factura_ref TEXT,
+            control TEXT
+        )
+    """)
+  conn.commit()
+  return conn
+
+
+conn = init_db()
 
 
 @st.cache_data(ttl=600)
@@ -82,9 +115,6 @@ porcentaje_vehiculo = st.sidebar.slider(
     "🚗 % Deducible para Mantenimiento de Vehículo", 0, 100, 75
 )
 
-if "transacciones" not in st.session_state:
-  st.session_state.transacciones = []
-
 pestanas = st.tabs([
     "📝 Registro Diario",
     "✏️ Gestionar Registros",
@@ -105,7 +135,7 @@ BANCOS_VENEZUELA = [
 ]
 
 # ---------------------------------------------------------
-# PESTAÑA 1: REGISTRO DIARIO (CON TASA HISTÓRICA)
+# PESTAÑA 1: REGISTRO DIARIO (GUARDADO EN SQLITE)
 # ---------------------------------------------------------
 with pestanas[0]:
   st.subheader("Registrar Nuevo Movimiento")
@@ -124,7 +154,6 @@ with pestanas[0]:
       )
       fecha = st.date_input("Fecha de la Transacción", datetime.date.today())
 
-      # Tasa específica para esta operación (por defecto la de hoy, ajustable si es de días pasados)
       tasa_operacion = st.number_input(
           "Tasa BCV aplicada a esta operación:",
           min_value=0.0,
@@ -182,7 +211,6 @@ with pestanas[0]:
     submitted = st.form_submit_button("Guardar Movimiento")
 
     if submitted:
-      # Cálculos usando la tasa específica de la fecha de la transacción
       monto_ves = monto if divisa == "VES" else monto * tasa_operacion
       monto_usd = monto / tasa_operacion if divisa == "VES" else monto
 
@@ -201,44 +229,50 @@ with pestanas[0]:
           else 0.0
       )
 
-      nueva_transaccion = {
-          "ID": len(st.session_state.transacciones) + 1,
-          "Fecha": fecha,
-          "Banco": banco_seleccionado,
-          "Tipo": tipo,
-          "Concepto": concepto if concepto else "Sin concepto",
-          "Categoría": categoria,
-          "Tasa BCV": tasa_operacion,
-          "Deducible ISLR": "Sí" if es_deducible else "No",
-          "Divisa": divisa,
-          "Monto Original": monto,
-          "Monto VES": round(monto_ves, 2),
-          "Monto USD": round(monto_usd, 2),
-          "IVA VES": round(monto_iva, 2),
-          "IGTF VES": round(igtf_monto, 2),
-          "Monto Deducible VES": round(monto_deducible_calculado, 2),
-          "Factura / Ref": nro_factura,
-          "Control": nro_control,
-      }
-
-      st.session_state.transacciones.append(nueva_transaccion)
-      st.success("¡Movimiento registrado con éxito a su tasa histórica!")
+      # Inserción directa en la base de datos SQLite
+      cursor = conn.cursor()
+      cursor.execute(
+          """
+                INSERT INTO transacciones (fecha, banco, tipo, concepto, categoria, tasa_bcv, deducible_islr, divisa, monto_original, monto_ves, monto_usd, iva_ves, igtf_ves, monto_deducible_ves, factura_ref, control)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+          (
+              str(fecha),
+              banco_seleccionado,
+              tipo,
+              concepto if concepto else "Sin concepto",
+              categoria,
+              tasa_operacion,
+              "Sí" if es_deducible else "No",
+              divisa,
+              monto,
+              round(monto_ves, 2),
+              round(monto_usd, 2),
+              round(monto_iva, 2),
+              round(igtf_monto, 2),
+              round(monto_deducible_calculado, 2),
+              nro_factura,
+              nro_control,
+          ),
+      )
+      conn.commit()
+      st.success("¡Movimiento guardado permanentemente en la base de datos!")
 
 # ---------------------------------------------------------
 # PESTAÑA 2: GESTIONAR REGISTROS
 # ---------------------------------------------------------
 with pestanas[1]:
   st.subheader("Gestión y Edición de Registros")
-  if not st.session_state.transacciones:
+  df_gestion = pd.read_sql("SELECT * FROM transacciones", conn)
+
+  if df_gestion.empty:
     st.info("No hay transacciones registradas.")
   else:
-    df_gestion = pd.DataFrame(st.session_state.transacciones)
-
     banco_filtro = st.selectbox(
         "Filtrar lista por Banco:", ["Todos"] + BANCOS_VENEZUELA
     )
     if banco_filtro != "Todos":
-      df_gestion = df_gestion[df_gestion["Banco"] == banco_filtro]
+      df_gestion = df_gestion[df_gestion["banco"] == banco_filtro]
 
     st.dataframe(df_gestion, use_container_width=True)
 
@@ -247,81 +281,93 @@ with pestanas[1]:
 
     with col_del:
       st.write("### 🗑️ Eliminar Registro")
-      ids_disponibles = [t["ID"] for t in st.session_state.transacciones]
-      id_a_eliminar = st.selectbox(
-          "Selecciona el ID a eliminar:", ids_disponibles
-      )
-      confirmar_borrado = st.checkbox(
-          f"⚠️ Confirmar eliminación permanente del ID #{id_a_eliminar}"
-      )
+      ids_disponibles = df_gestion["id"].tolist()
+      if ids_disponibles:
+        id_a_eliminar = st.selectbox(
+            "Selecciona el ID a eliminar:", ids_disponibles
+        )
+        confirmar_borrado = st.checkbox(
+            f"⚠️ Confirmar eliminación permanente del ID #{id_a_eliminar}"
+        )
 
-      if st.button("🔴 Eliminar Registro", type="primary"):
-        if confirmar_borrado:
-          st.session_state.transacciones = [
-              t
-              for t in st.session_state.transacciones
-              if t["ID"] != id_a_eliminar
-          ]
-          st.success(f"Registro #{id_a_eliminar} eliminado.")
-          st.rerun()
-        else:
-          st.warning("Marca la casilla de confirmación.")
+        if st.button("🔴 Eliminar Registro", type="primary"):
+          if confirmar_borrado:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM transacciones WHERE id = ?", (id_a_eliminar,)
+            )
+            conn.commit()
+            st.success(f"Registro #{id_a_eliminar} eliminado.")
+            st.rerun()
+          else:
+            st.warning("Marca la casilla de confirmación.")
 
     with col_edit:
       st.write("### ✏️ Modificar Registro")
-      id_a_editar = st.selectbox(
-          "Selecciona el ID a modificar:", ids_disponibles, key="edit_select"
-      )
-      reg_actual = next(
-          t
-          for t in st.session_state.transacciones
-          if t["ID"] == id_a_editar
-      )
+      if ids_disponibles:
+        id_a_editar = st.selectbox(
+            "Selecciona el ID a modificar:", ids_disponibles, key="edit_select"
+        )
+        reg_actual = df_gestion[df_gestion["id"] == id_a_editar].iloc[0]
 
-      nuevo_banco = st.selectbox(
-          "Nuevo Banco:",
-          BANCOS_VENEZUELA,
-          index=BANCOS_VENEZUELA.index(reg_actual["Banco"])
-          if reg_actual["Banco"] in BANCOS_VENEZUELA
-          else 0,
-      )
-      nuevo_concepto = st.text_input(
-          "Nuevo Concepto:", value=reg_actual["Concepto"]
-      )
-      nuevo_monto = st.number_input(
-          "Nuevo Monto:",
-          value=float(reg_actual["Monto Original"]),
-          min_value=0.0,
-      )
-      nueva_tasa = st.number_input(
-          "Tasa BCV:", value=float(reg_actual["Tasa BCV"]), min_value=0.0
-      )
+        nuevo_banco = st.selectbox(
+            "Nuevo Banco:",
+            BANCOS_VENEZUELA,
+            index=BANCOS_VENEZUELA.index(reg_actual["banco"])
+            if reg_actual["banco"] in BANCOS_VENEZUELA
+            else 0,
+        )
+        nuevo_concepto = st.text_input(
+            "Nuevo Concepto:", value=reg_actual["concepto"]
+        )
+        nuevo_monto = st.number_input(
+            "Nuevo Monto:",
+            value=float(reg_actual["monto_original"]),
+            min_value=0.0,
+        )
+        nueva_tasa = st.number_input(
+            "Tasa BCV:", value=float(reg_actual["tasa_bcv"]), min_value=0.0
+        )
 
-      confirmar_edicion = st.checkbox(
-          f"⚠️ Confirmar cambios sobre ID #{id_a_editar}"
-      )
+        confirmar_edicion = st.checkbox(
+            f"⚠️ Confirmar cambios sobre ID #{id_a_editar}"
+        )
 
-      if st.button("🟢 Guardar Cambios"):
-        if confirmar_edicion:
-          reg_actual["Banco"] = nuevo_banco
-          reg_actual["Concepto"] = nuevo_concepto
-          reg_actual["Monto Original"] = nuevo_monto
-          reg_actual["Tasa BCV"] = nueva_tasa
-          reg_actual["Monto VES"] = (
-              nuevo_monto
-              if reg_actual["Divisa"] == "VES"
-              else nuevo_monto * nueva_tasa
-          )
-          reg_actual["Monto USD"] = (
-              nuevo_monto / nueva_tasa
-              if reg_actual["Divisa"] == "VES"
-              else nuevo_monto
-          )
+        if st.button("🟢 Guardar Cambios"):
+          if confirmar_edicion:
+            monto_ves_nuevo = (
+                nuevo_monto
+                if reg_actual["divisa"] == "VES"
+                else nuevo_monto * nueva_tasa
+            )
+            monto_usd_nuevo = (
+                nuevo_monto / nueva_tasa
+                if reg_actual["divisa"] == "VES"
+                else nuevo_monto
+            )
 
-          st.success(f"Registro #{id_a_editar} actualizado.")
-          st.rerun()
-        else:
-          st.warning("Marca la casilla de confirmación.")
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                            UPDATE transacciones 
+                            SET banco=?, concepto=?, monto_original=?, tasa_bcv=?, monto_ves=?, monto_usd=?
+                            WHERE id=?
+                        """,
+                (
+                    nuevo_banco,
+                    nuevo_concepto,
+                    nuevo_monto,
+                    nueva_tasa,
+                    round(monto_ves_nuevo, 2),
+                    round(monto_usd_nuevo, 2),
+                    id_a_editar,
+                ),
+            )
+            conn.commit()
+            st.success(f"Registro #{id_a_editar} actualizado.")
+            st.rerun()
+          else:
+            st.warning("Marca la casilla de confirmación.")
 
 # ---------------------------------------------------------
 # PESTAÑA 3: CONCILIACIÓN BANCARIA
@@ -347,13 +393,12 @@ with pestanas[2]:
       st.write(f"Estado de cuenta cargado de **{banco_conciliar}**:")
       st.dataframe(df_banco.head(), use_container_width=True)
 
-      if st.session_state.transacciones:
-        df_mis_regs = pd.DataFrame(st.session_state.transacciones)
-        df_mis_regs_banco = df_mis_regs[df_mis_regs["Banco"] == banco_conciliar]
-
+      df_mis_regs = pd.read_sql("SELECT * FROM transacciones", conn)
+      if not df_mis_regs.empty:
+        df_mis_regs_banco = df_mis_regs[df_mis_regs["banco"] == banco_conciliar]
         st.divider()
         st.write(
-            f"Tus registros internos guardados para **{banco_conciliar}**:"
+            f"Tus registros guardados en la BD para **{banco_conciliar}**:"
         )
         st.dataframe(df_mis_regs_banco, use_container_width=True)
     except Exception as e:
@@ -364,14 +409,13 @@ with pestanas[2]:
 # ---------------------------------------------------------
 with pestanas[3]:
   st.subheader("Consolidado Fiscal y Cierre General")
+  df = pd.read_sql("SELECT * FROM transacciones", conn)
 
-  if st.session_state.transacciones:
-    df = pd.DataFrame(st.session_state.transacciones)
-
-    total_ingresos = df[df["Tipo"] == "Ingreso"]["Monto VES"].sum()
-    total_gastos = df[df["Tipo"] == "Gasto"]["Monto VES"].sum()
-    total_iva = df["IVA VES"].sum()
-    total_deducible = df["Monto Deducible VES"].sum()
+  if not df.empty:
+    total_ingresos = df[df["tipo"] == "Ingreso"]["monto_ves"].sum()
+    total_gastos = df[df["tipo"] == "Gasto"]["monto_ves"].sum()
+    total_iva = df["iva_ves"].sum()
+    total_deducible = df["monto_deducible_ves"].sum()
     enriquecimiento_neto = total_ingresos - total_deducible
 
     islr_estimado = 0.0
