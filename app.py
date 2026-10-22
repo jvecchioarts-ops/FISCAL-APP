@@ -8,9 +8,9 @@ st.set_page_config(
     page_title="Control Fiscal Venezuela - Gastos e Ingresos", layout="wide"
 )
 
-st.title("🇻🇪 Control Financiero y Conciliación Bancaria - Venezuela")
+st.title("🇻🇪 Control Financiero Multibanco y Conciliación - Venezuela")
 st.write(
-    "Registra tus movimientos, calcula IVA/IGTF, estima tu ISLR, realiza la conciliación con tu estado de cuenta y exporta tu cierre mensual."
+    "Registra transacciones por banco, gestiona ISLR/IVA/IGTF y realiza conciliaciones independientes."
 )
 
 
@@ -27,7 +27,7 @@ def obtener_tasa_bcv_actual():
   return 36.50
 
 
-# Panel Lateral de Configuración Fiscal
+# Sidebar Config
 st.sidebar.header("⚙️ Configuración Fiscal")
 st.sidebar.markdown(
     "🔗 [Consultar Tasa Oficial en el BCV](https://www.bcv.org.ve/)",
@@ -53,27 +53,54 @@ porcentaje_vehiculo = st.sidebar.slider(
 if "transacciones" not in st.session_state:
   st.session_state.transacciones = []
 
-# Pestañas principales de la aplicación
-pestanas = st.tabs(
-    ["📝 Registro Diario", "🏦 Conciliación Bancaria", "📊 Cierre y Reportes"]
-)
+pestanas = st.tabs([
+    "📝 Registro Diario",
+    "✏️ Gestionar Registros",
+    "🏦 Conciliación Bancaria",
+    "📊 Cierre y Reportes",
+])
 
+# Lista de bancos soportados
+BANCOS_VENEZUELA = [
+    "Banco de Venezuela (BDV)",
+    "Banesco Banco Universal",
+    "Banco Mercantil",
+    "BBVA Provincial",
+    "Banco Nacional de Crédito (BNC)",
+    "Bancamiga",
+    "Banplus",
+    "Efectivo / Divisas en Mano",
+    "Otro / Cuenta Internacional",
+]
+
+# ---------------------------------------------------------
+# PESTAÑA 1: REGISTRO DIARIO (MULTIBANCO)
+# ---------------------------------------------------------
 with pestanas[0]:
   st.subheader("Registrar Nuevo Movimiento")
 
-  with st.form("form_transaccion"):
+  with st.form("form_transaccion", clear_on_submit=True):
     col1, col2 = st.columns(2)
 
     with col1:
+      banco_seleccionado = st.selectbox(
+          "🏦 Banco / Cuenta de Origen o Destino", BANCOS_VENEZUELA
+      )
       tipo = st.selectbox("Tipo de Movimiento", ["Ingreso", "Gasto"])
       divisa = st.selectbox("Moneda de la Operación", ["USD", "VES"])
       monto = st.number_input(
           "Monto Total de la Operación", min_value=0.0, step=0.01
       )
       fecha = st.date_input("Fecha de la Transacción", datetime.date.today())
+      concepto = st.text_input(
+          "Concepto / Descripción",
+          placeholder="Ej: Pago de proveedor, Transferencia recibida, Almuerzo",
+      )
 
     with col2:
       categorias = [
+          "🛒 Alimentos / Supermercado / Comida",
+          "🏥 Gastos Médicos y Odontológicos",
           "Alquiler de Local / Oficina",
           "Servicios Públicos (Luz, Agua, Telecomunicaciones)",
           "Honorarios Profesionales",
@@ -82,16 +109,22 @@ with pestanas[0]:
           "Mantenimiento y Reparaciones Generales",
           "🚗 Mantenimiento y Reparaciones de Vehículo",
           "Gastos Personales (No Deducibles)",
-          "Otros Gastos Operativos",
+          "Préstamos / Financiamiento",
+          "Otros Gastos / Ingresos Operativos",
       ]
       categoria = st.selectbox("Rubro / Categoría", categorias)
 
-      es_deducible_base = False if "Personales" in categoria else True
+      if "Médicos" in categoria and tipo_contribuyente == "Persona Natural":
+        es_deducible_base = True
+      elif "Alimentos" in categoria or "Personales" in categoria:
+        es_deducible_base = False
+      else:
+        es_deducible_base = True if tipo == "Gasto" else False
+
       es_deducible = st.checkbox(
           "¿Es gasto deducible para el ISLR?", value=es_deducible_base
       )
-
-      nro_factura = st.text_input("Número de Factura")
+      nro_factura = st.text_input("Número de Factura / Referencia")
       nro_control = st.text_input("Número de Control (SENIAT)")
 
     col3, col4 = st.columns(2)
@@ -119,13 +152,16 @@ with pestanas[0]:
       monto_deducible_calculado = (
           (base_imponible if aplica_iva != "Exento (0%)" else monto_ves)
           * factor_deduccion
-          if es_deducible
+          if (es_deducible and tipo == "Gasto")
           else 0.0
       )
 
       nueva_transaccion = {
+          "ID": len(st.session_state.transacciones) + 1,
           "Fecha": fecha,
+          "Banco": banco_seleccionado,
           "Tipo": tipo,
+          "Concepto": concepto if concepto else "Sin concepto",
           "Categoría": categoria,
           "Deducible ISLR": "Sí" if es_deducible else "No",
           "Divisa": divisa,
@@ -135,52 +171,151 @@ with pestanas[0]:
           "IVA VES": round(monto_iva, 2),
           "IGTF VES": round(igtf_monto, 2),
           "Monto Deducible VES": round(monto_deducible_calculado, 2),
-          "Factura": nro_factura,
+          "Factura / Ref": nro_factura,
           "Control": nro_control,
       }
 
       st.session_state.transacciones.append(nueva_transaccion)
       st.success("¡Movimiento registrado con éxito!")
 
-  if st.session_state.transacciones:
-    st.divider()
-    st.subheader("Movimientos Registrados Recientemente")
-    df_temp = pd.DataFrame(st.session_state.transacciones)
-    st.dataframe(df_temp, use_container_width=True)
-
+# ---------------------------------------------------------
+# PESTAÑA 2: GESTIONAR REGISTROS
+# ---------------------------------------------------------
 with pestanas[1]:
-  st.subheader("Conciliación Bancaria Mensual")
-  st.write(
-      "Sube el archivo de tu estado de cuenta (formato Excel o CSV que descargues de tu banco en Venezuela) para compararlo con tus registros."
-  )
+  st.subheader("Gestión y Edición de Registros")
+  if not st.session_state.transacciones:
+    st.info("No hay transacciones registradas.")
+  else:
+    df_gestion = pd.DataFrame(st.session_state.transacciones)
 
+    # Filtro opcional por Banco
+    banco_filtro = st.selectbox(
+        "Filtrar lista por Banco:", ["Todos"] + BANCOS_VENEZUELA
+    )
+    if banco_filtro != "Todos":
+      df_gestion = df_gestion[df_gestion["Banco"] == banco_filtro]
+
+    st.dataframe(df_gestion, use_container_width=True)
+
+    st.divider()
+    col_edit, col_del = st.columns(2)
+
+    with col_del:
+      st.write("### 🗑️ Eliminar Registro")
+      ids_disponibles = [t["ID"] for t in st.session_state.transacciones]
+      id_a_eliminar = st.selectbox(
+          "Selecciona el ID a eliminar:", ids_disponibles
+      )
+      confirmar_borrado = st.checkbox(
+          f"⚠️ Confirmar eliminación permanente del ID #{id_a_eliminar}"
+      )
+
+      if st.button("🔴 Eliminar Registro", type="primary"):
+        if confirmar_borrado:
+          st.session_state.transacciones = [
+              t
+              for t in st.session_state.transacciones
+              if t["ID"] != id_a_eliminar
+          ]
+          st.success(f"Registro #{id_a_eliminar} eliminado.")
+          st.rerun()
+        else:
+          st.warning("Marca la casilla de confirmación.")
+
+    with col_edit:
+      st.write("### ✏️ Modificar Registro")
+      id_a_editar = st.selectbox(
+          "Selecciona el ID a modificar:", ids_disponibles, key="edit_select"
+      )
+      reg_actual = next(
+          t
+          for t in st.session_state.transacciones
+          if t["ID"] == id_a_editar
+      )
+
+      nuevo_banco = st.selectbox(
+          "Nuevo Banco:",
+          BANCOS_VENEZUELA,
+          index=BANCOS_VENEZUELA.index(reg_actual["Banco"])
+          if reg_actual["Banco"] in BANCOS_VENEZUELA
+          else 0,
+      )
+      nuevo_concepto = st.text_input(
+          "Nuevo Concepto:", value=reg_actual["Concepto"]
+      )
+      nuevo_monto = st.number_input(
+          "Nuevo Monto:",
+          value=float(reg_actual["Monto Original"]),
+          min_value=0.0,
+      )
+
+      confirmar_edicion = st.checkbox(
+          f"⚠️ Confirmar cambios sobre ID #{id_a_editar}"
+      )
+
+      if st.button("🟢 Guardar Cambios"):
+        if confirmar_edicion:
+          reg_actual["Banco"] = nuevo_banco
+          reg_actual["Concepto"] = nuevo_concepto
+          reg_actual["Monto Original"] = nuevo_monto
+          reg_actual["Monto VES"] = (
+              nuevo_monto
+              if reg_actual["Divisa"] == "VES"
+              else nuevo_monto * tasa_bcv
+          )
+          reg_actual["Monto USD"] = (
+              nuevo_monto / tasa_bcv
+              if reg_actual["Divisa"] == "VES"
+              else nuevo_monto
+          )
+
+          st.success(f"Registro #{id_a_editar} actualizado.")
+          st.rerun()
+        else:
+          st.warning("Marca la casilla de confirmación.")
+
+# ---------------------------------------------------------
+# PESTAÑA 3: CONCILIACIÓN BANCARIA POR BANCO
+# ---------------------------------------------------------
+with pestanas[2]:
+  st.subheader("Conciliación Bancaria por Banco Especifico")
+
+  banco_conciliar = st.selectbox(
+      "Selecciona el Banco a Conciliar:", BANCOS_VENEZUELA
+  )
   archivo_banco = st.file_uploader(
-      "Cargar Estado de Cuenta Bancario (.xlsx, .csv)", type=["xlsx", "csv"]
+      f"Cargar Estado de Cuenta de {banco_conciliar} (.xlsx, .csv)",
+      type=["xlsx", "csv"],
   )
 
   if archivo_banco is not None:
     try:
-      if archivo_banco.name.endswith(".csv"):
-        df_banco = pd.read_csv(archivo_banco)
-      else:
-        df_banco = pd.read_excel(archivo_banco)
-
-      st.write("Vista previa del estado de cuenta bancario cargado:")
+      df_banco = (
+          pd.read_csv(archivo_banco)
+          if archivo_banco.name.endswith(".csv")
+          else pd.read_excel(archivo_banco)
+      )
+      st.write(f"Estado de cuenta cargado de **{banco_conciliar}**:")
       st.dataframe(df_banco.head(), use_container_width=True)
 
+      # Registros guardados para ese banco
       if st.session_state.transacciones:
-        st.info(
-            "💡 Consejo de conciliación: Verifica que los montos totales y referencias de tus registros coincidan con los débitos/créditos de este archivo bancario."
-        )
-      else:
-        st.warning(
-            "No hay transacciones guardadas aún en la pestaña de Registro Diario para conciliar."
-        )
-    except Exception as e:
-      st.error(f"Error al leer el archivo bancario: {e}")
+        df_mis_regs = pd.DataFrame(st.session_state.transacciones)
+        df_mis_regs_banco = df_mis_regs[df_mis_regs["Banco"] == banco_conciliar]
 
-with pestanas[2]:
-  st.subheader("Consolidado, Estimación Fiscal y Cierre")
+        st.divider()
+        st.write(
+            f"Tus registros internos guardados para **{banco_conciliar}**:"
+        )
+        st.dataframe(df_mis_regs_banco, use_container_width=True)
+    except Exception as e:
+      st.error(f"Error al leer el archivo: {e}")
+
+# ---------------------------------------------------------
+# PESTAÑA 4: CIERRE Y REPORTES
+# ---------------------------------------------------------
+with pestanas[3]:
+  st.subheader("Consolidado Fiscal y Cierre General")
 
   if st.session_state.transacciones:
     df = pd.DataFrame(st.session_state.transacciones)
@@ -188,7 +323,6 @@ with pestanas[2]:
     total_ingresos = df[df["Tipo"] == "Ingreso"]["Monto VES"].sum()
     total_gastos = df[df["Tipo"] == "Gasto"]["Monto VES"].sum()
     total_iva = df["IVA VES"].sum()
-    total_igtf = df["IGTF VES"].sum()
     total_deducible = df["Monto Deducible VES"].sum()
     enriquecimiento_neto = total_ingresos - total_deducible
 
@@ -212,7 +346,7 @@ with pestanas[2]:
     excel_data = output.getvalue()
 
     st.download_button(
-        label="📥 Descargar Reporte de Cierre en Excel (.xlsx)",
+        label="📥 Descargar Reporte Completo en Excel (.xlsx)",
         data=excel_data,
         file_name=(
             f"cierre_fiscal_{datetime.date.today().strftime('%Y_%m')}.xlsx"
