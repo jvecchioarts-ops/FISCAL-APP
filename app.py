@@ -1,22 +1,25 @@
 import datetime
 import io
+import os
 import bs4
 import pandas as pd
 import requests
 import sqlite3
 import streamlit as st
 
-# --- CONFIGURACIÓN DE PÁGINA E ÍCONO EN PESTAÑA ---
+# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="FISCAL APP - Gestiona tus Finanzas Fácilmente",
+    page_title="FISCAL APP - Gestión Financiera Local",
     page_icon="logo.jpg",
     layout="wide",
 )
 
+DB_NAME = "control_fiscal.db"
 
-# --- BASE DE DATOS Y ESTADO DE BLOQUEO ---
+
+# --- INICIALIZACIÓN DE BASE DE DATOS LOCAL ---
 def init_db():
-  conn = sqlite3.connect("control_fiscal.db", check_same_thread=False)
+  conn = sqlite3.connect(DB_NAME, check_same_thread=False)
   cursor = conn.cursor()
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS transacciones (
@@ -28,13 +31,15 @@ def init_db():
         )
     """)
   cursor.execute("""
-        CREATE TABLE IF NOT EXISTS estado_demo (
+        CREATE TABLE IF NOT EXISTS configuracion_licencia (
             id INTEGER PRIMARY KEY,
-            bloqueado INTEGER
+            licencia_key TEXT,
+            activa INTEGER
         )
     """)
   cursor.execute(
-      "INSERT OR IGNORE INTO estado_demo (id, bloqueado) VALUES (1, 0)"
+      "INSERT OR IGNORE INTO configuracion_licencia (id, licencia_key, activa)"
+      " VALUES (1, '', 0)"
   )
   conn.commit()
   return conn
@@ -43,37 +48,67 @@ def init_db():
 conn = init_db()
 
 
-def esta_bloqueada():
+# --- FUNCIONES DE SEGURIDAD Y LICENCIAMIENTO LOCAL ---
+def verificar_licencia():
   cursor = conn.cursor()
-  cursor.execute("SELECT bloqueado FROM estado_demo WHERE id = 1")
-  res = cursor.fetchone()
-  return res[0] == 1 if res else False
-
-
-def bloquear_app():
-  cursor = conn.cursor()
-  cursor.execute("UPDATE estado_demo SET bloqueado = 1 WHERE id = 1")
-  conn.commit()
-
-
-# --- SI LA APP ESTÁ BLOQUEADA ---
-if esta_bloqueada():
-  st.error("🔒 **EL PERIODO DE PRUEBA HA FINALIZADO**")
-  st.info(
-      "Esta versión de prueba ha completado su ciclo tras el cierre y exportación"
-      " del ejercicio."
+  cursor.execute(
+      "SELECT licencia_key, activa FROM configuracion_licencia WHERE id = 1"
   )
-  st.markdown("""
-    ### 🚀 Gracias por probar FISCAL APP
-    * **Gestión Financiera y Control Fiscal en Venezuela**
-    
-    Para reactivar la aplicación, solicitar licencias multiusuario o personalizar la plataforma para tu empresa, ponte en contacto con el desarrollador.
-    """)
+  res = cursor.fetchone()
+  if res and res[1] == 1:
+    return True, res[0]
+  return False, ""
+
+
+def activar_licencia_local(clave_ingresada):
+  CLAVE_MAESTRA = "FISCAL-PRO-2026"
+  if (
+      clave_ingresada.strip().upper() == CLAVE_MAESTRA
+      or clave_ingresada.endswith("-FISCAL2026")
+  ):
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE configuracion_licencia SET licencia_key = ?, activa = 1 WHERE"
+        " id = 1",
+        (clave_ingresada,),
+    )
+    conn.commit()
+    return True
+  return False
+
+
+# --- CONTROL DE ACTIVACIÓN DE LA APP ---
+licencia_valida, clave_actual = verificar_licencia()
+
+if not licencia_valida:
+  st.warning("🔒 **APLICACIÓN NO ACTIVADA**")
+  st.info("Por favor, ingresa tu Clave de Licencia Local para activar FISCAL APP.")
+
+  col_lic1, col_lic2 = st.columns([3, 1])
+  with col_lic1:
+    clave_input = st.text_input(
+        "Clave de Producto / Licencia:", type="password"
+    )
+  with col_lic2:
+    st.write(" ")
+    st.write(" ")
+    if st.button("Activar Licencia", type="primary"):
+      if activar_licencia_local(clave_input):
+        st.success("¡Licencia activada con éxito!")
+        st.rerun()
+      else:
+        st.error("Clave de licencia inválida.")
+
+  st.divider()
+  st.caption(
+      "Para adquirir una licencia o soporte técnico, contacta con el autor del"
+      " software."
+  )
   st.stop()
 
-# --- CABECERA PRINCIPAL CON LOGO Y TÍTULO ---
-col_logo, col_titulo = st.columns([1, 4])
 
+# --- CABECERA PRINCIPAL ---
+col_logo, col_titulo = st.columns([1, 4])
 with col_logo:
   try:
     st.image("logo.jpg", width=130)
@@ -82,12 +117,8 @@ with col_logo:
 
 with col_titulo:
   st.title("FISCAL APP")
-  st.subheader('"Gestiona tus Finanzas Fácilmente"')
+  st.subheader('"Gestión Financiera y Control Fiscal Local"')
 
-st.caption(
-    "Control financiero multibanco, gestión de ISLR/IVA/IGTF y conciliación"
-    " bancaria bajo normativas SENIAT."
-)
 st.divider()
 
 
@@ -113,25 +144,16 @@ def obtener_tasa_bcv_automatica():
         return float(tasa_limpia)
   except Exception:
     pass
-
-  try:
-    r = requests.get("https://ve.dolarapi.com/v1/dolares/oficial", timeout=5)
-    if r.status_code == 200:
-      return float(r.json()["promedio"])
-  except Exception:
-    pass
-
   return 36.50
 
 
 requests.packages.urllib3.disable_warnings()
 
-# --- BARRA LATERAL (CONFIGURACIÓN FISCAL Y TASA EDITABLE) ---
+# --- BARRA LATERAL CON MÓDULO DE RESPALDOS (BACKUP) ---
 st.sidebar.image("logo.jpg", use_container_width=True)
-st.sidebar.header("⚙️ Configuración Fiscal")
+st.sidebar.header("⚙️ Configuración y Respaldos")
 
 tasa_detectada = obtener_tasa_bcv_automatica()
-
 tasa_bcv = st.sidebar.number_input(
     "Tasa BCV (Bs. / USD):",
     min_value=0.0,
@@ -144,9 +166,30 @@ rif_usuario = st.sidebar.text_input("Tu RIF / Cédula:", value="J-12345678-9")
 tipo_contribuyente = st.sidebar.selectbox(
     "Tipo de Contribuyente", ["Persona Natural", "Persona Jurídica"]
 )
-porcentaje_vehiculo = st.sidebar.slider(
-    "🚗 % Deducible Vehículo", 0, 100, 75
+
+st.sidebar.divider()
+st.sidebar.subheader("💾 Respaldos de Datos (Backup)")
+
+if os.path.exists(DB_NAME):
+  with open(DB_NAME, "rb") as db_file:
+    st.sidebar.download_button(
+        label="📦 Exportar Copia de Seguridad (.db)",
+        data=db_file.read(),
+        file_name=(
+            f"backup_fiscal_{datetime.date.today().strftime('%Y_%m_%d')}.db"
+        ),
+        mime="application/x-sqlite3",
+    )
+
+archivo_backup = st.sidebar.file_uploader(
+    "Restaurar Base de Datos (.db)", type=["db"]
 )
+if archivo_backup is not None:
+  if st.sidebar.button("⚠️ Confirmar Restauración"):
+    with open(DB_NAME, "wb") as f:
+      f.write(archivo_backup.getbuffer())
+    st.sidebar.success("¡Base de datos restaurada correctamente!")
+    st.rerun()
 
 pestanas = st.tabs([
     "📝 Registro Diario",
@@ -155,7 +198,6 @@ pestanas = st.tabs([
     "📊 Cierre y Reportes",
 ])
 
-# Lista base de bancos
 BANCOS_VENEZUELA = [
     "Banco de Venezuela (BDV)",
     "Banesco Banco Universal",
@@ -167,30 +209,12 @@ BANCOS_VENEZUELA = [
     "Efectivo / Divisas en Mano",
 ]
 
-# Dentro de la Pestaña 1 (Registro Diario), en la columna del formulario:
-with col1:
-  # Añadimos dinámicamente la opción "Otro (Especificar)"
-  banco_opcion = st.selectbox(
-      "🏦 Banco / Cuenta", BANCOS_VENEZUELA + ["Otro (Especificar)"]
-  )
-
-  # Si selecciona "Otro", habilitamos un cajón de texto libre
-  if banco_opcion == "Otro (Especificar)":
-    banco_seleccionado = st.text_input(
-        "Escriba el nombre del Banco / Entidad:"
-    )
-    if not banco_seleccionado:
-      banco_seleccionado = "Banco Personalizado"
-  else:
-    banco_seleccionado = banco_opcion
-
 # ---------------------------------------------------------
 # PESTAÑA 1: REGISTRO DIARIO
 # ---------------------------------------------------------
 with pestanas[0]:
   st.subheader("Registrar Nuevo Movimiento")
 
-  # CAMPOS DE SELECCIÓN DINÁMICA (FUERA DEL FORMULARIO PARA REACCIÓN EN TIEMPO REAL)
   c_tipo, c_cat = st.columns(2)
   with c_tipo:
     tipo = st.selectbox("Tipo de Movimiento", ["Ingreso", "Gasto"])
@@ -213,7 +237,6 @@ with pestanas[0]:
   with c_cat:
     categoria = st.selectbox("Rubro / Categoría", categorias)
 
-  # --- EVALUACIÓN AUTOMÁTICA EN TIEMPO REAL ---
   cat_lower = categoria.lower()
 
   if tipo == "Ingreso":
@@ -239,19 +262,27 @@ with pestanas[0]:
       status_deducible = "Deducible (Gasto Necesario - Art. 27 LISLR)"
       es_deducible_bool = True
 
-  # MOSTRAR EL VEREDICTO DE FORMA CLARA Y DESTACADA
   if es_deducible_bool:
     st.success(f"✅ **Criterio ISLR:** {status_deducible}")
   else:
     st.info(f"⚖️ **Criterio ISLR:** {status_deducible}")
 
-  # FORMULARIO PARA INGRESAR VALORES Y GUARDAR
   with st.form("form_transaccion", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
-      banco_seleccionado = st.selectbox(
-          "🏦 Banco / Cuenta", BANCOS_VENEZUELA
+      # Selección de banco con opción personalizada integrada
+      banco_opcion = st.selectbox(
+          "🏦 Banco / Cuenta", BANCOS_VENEZUELA + ["Otro (Especificar)"]
       )
+      if banco_opcion == "Otro (Especificar)":
+        banco_seleccionado = st.text_input(
+            "Escriba el nombre del Banco / Entidad:"
+        )
+        if not banco_seleccionado:
+          banco_seleccionado = "Banco Personalizado"
+      else:
+        banco_seleccionado = banco_opcion
+
       divisa = st.selectbox("Moneda", ["USD", "VES"])
       monto = st.number_input(
           "Monto Total", min_value=0.0, step=0.01
@@ -282,9 +313,7 @@ with pestanas[0]:
       monto_iva = monto_ves - base_imponible
       igtf_monto = monto_ves * 0.03 if aplica_igtf else 0.0
 
-      factor_deduccion = (
-          (porcentaje_vehiculo / 100.0) if "vehículo" in cat_lower else 1.0
-      )
+      factor_deduccion = 0.75 if "vehículo" in cat_lower else 1.0
       monto_deducible_calculado = (
           (base_imponible if aplica_iva != "Exento (0%)" else monto_ves)
           * factor_deduccion
@@ -337,127 +366,18 @@ with pestanas[1]:
       df_gestion = df_gestion[df_gestion["banco"] == banco_filtro]
 
     st.dataframe(df_gestion, use_container_width=True)
-    st.divider()
-    col_edit, col_del = st.columns(2)
-
-    with col_del:
-      st.write("### 🗑️ Eliminar Registro")
-      ids_disponibles = df_gestion["id"].tolist()
-      if ids_disponibles:
-        id_a_eliminar = st.selectbox(
-            "Selecciona el ID a eliminar:", ids_disponibles
-        )
-        confirmar_borrado = st.checkbox(
-            f"⚠️ Confirmar eliminación permanente del ID #{id_a_eliminar}"
-        )
-        if st.button("🔴 Eliminar Registro", type="primary"):
-          if confirmar_borrado:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM transacciones WHERE id = ?", (id_a_eliminar,)
-            )
-            conn.commit()
-            st.success(f"Registro #{id_a_eliminar} eliminado.")
-            st.rerun()
-
-    with col_edit:
-      st.write("### ✏️ Modificar Registro")
-      if ids_disponibles:
-        id_a_editar = st.selectbox(
-            "Selecciona el ID a modificar:", ids_disponibles, key="edit_select"
-        )
-        reg_actual = df_gestion[df_gestion["id"] == id_a_editar].iloc[0]
-        nuevo_banco = st.selectbox(
-            "Nuevo Banco:",
-            BANCOS_VENEZUELA,
-            index=BANCOS_VENEZUELA.index(reg_actual["banco"])
-            if reg_actual["banco"] in BANCOS_VENEZUELA
-            else 0,
-        )
-        nuevo_concepto = st.text_input(
-            "Nuevo Concepto:", value=reg_actual["concepto"]
-        )
-        nuevo_monto = st.number_input(
-            "Nuevo Monto:",
-            value=float(reg_actual["monto_original"]),
-            min_value=0.0,
-        )
-        nueva_tasa = st.number_input(
-            "Tasa BCV:", value=float(reg_actual["tasa_bcv"]), min_value=0.0
-        )
-        confirmar_edicion = st.checkbox(
-            f"⚠️ Confirmar cambios sobre ID #{id_a_editar}"
-        )
-
-        if st.button("🟢 Guardar Cambios"):
-          if confirmar_edicion:
-            monto_ves_nuevo = (
-                nuevo_monto
-                if reg_actual["divisa"] == "VES"
-                else nuevo_monto * nueva_tasa
-            )
-            monto_usd_nuevo = (
-                nuevo_monto / nueva_tasa
-                if reg_actual["divisa"] == "VES"
-                else nuevo_monto
-            )
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                            UPDATE transacciones 
-                            SET banco=?, concepto=?, monto_original=?, tasa_bcv=?, monto_ves=?, monto_usd=?
-                            WHERE id=?
-                        """,
-                (
-                    nuevo_banco,
-                    nuevo_concepto,
-                    nuevo_monto,
-                    nueva_tasa,
-                    round(monto_ves_nuevo, 2),
-                    round(monto_usd_nuevo, 2),
-                    id_a_editar,
-                ),
-            )
-            conn.commit()
-            st.success(f"Registro #{id_a_editar} actualizado.")
-            st.rerun()
 
 # ---------------------------------------------------------
 # PESTAÑA 3: CONCILIACIÓN BANCARIA
 # ---------------------------------------------------------
 with pestanas[2]:
-  st.subheader("Conciliación Bancaria")
-  banco_conciliar = st.selectbox(
-      "Selecciona el Banco:", BANCOS_VENEZUELA
+  st.subheader("Conciliación Bancaria Local")
+  st.caption(
+      "Los archivos procesados permanecen en la memoria local de tu equipo."
   )
-  archivo_banco = st.file_uploader(
-      f"Cargar Estado de Cuenta de {banco_conciliar} (.xlsx, .csv)",
-      type=["xlsx", "csv"],
-  )
-
-  if archivo_banco is not None:
-    try:
-      df_banco = (
-          pd.read_csv(archivo_banco)
-          if archivo_banco.name.endswith(".csv")
-          else pd.read_excel(archivo_banco)
-      )
-      st.write(f"Estado de cuenta cargado de **{banco_conciliar}**:")
-      st.dataframe(df_banco.head(), use_container_width=True)
-
-      df_mis_regs = pd.read_sql("SELECT * FROM transacciones", conn)
-      if not df_mis_regs.empty:
-        df_mis_regs_banco = df_mis_regs[df_mis_regs["banco"] == banco_conciliar]
-        st.divider()
-        st.write(
-            f"Tus registros guardados en la BD para **{banco_conciliar}**:"
-        )
-        st.dataframe(df_mis_regs_banco, use_container_width=True)
-    except Exception as e:
-      st.error(f"Error al leer el archivo: {e}")
 
 # ---------------------------------------------------------
-# PESTAÑA 4: CIERRE, REPORTES Y BLOQUEO AUTOMÁTICO
+# PESTAÑA 4: CIERRE Y REPORTES
 # ---------------------------------------------------------
 with pestanas[3]:
   st.subheader("Consolidado Fiscal y Cierre General")
@@ -466,37 +386,20 @@ with pestanas[3]:
   if not df.empty:
     total_ingresos = df[df["tipo"] == "Ingreso"]["monto_ves"].sum()
     total_gastos = df[df["tipo"] == "Gasto"]["monto_ves"].sum()
-    total_iva = df["iva_ves"].sum()
     total_deducible = df["monto_deducible_ves"].sum()
     enriquecimiento_neto = total_ingresos - total_deducible
 
-    islr_estimado = 0.0
-    if enriquecimiento_neto > 0:
-      islr_estimado = (
-          enriquecimiento_neto * 0.15
-          if tipo_contribuyente == "Persona Jurídica"
-          else enriquecimiento_neto * 0.06
-      )
-
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2 = st.columns(2)
     m1.metric("Total Ingresos", f"Bs. {total_ingresos:,.2f}")
     m2.metric("Gastos Deducibles", f"Bs. {total_deducible:,.2f}")
-    m3.metric("IVA Acumulado", f"Bs. {total_iva:,.2f}")
-    m4.metric("ISLR Estimado", f"Bs. {islr_estimado:,.2f}")
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
       df.to_excel(writer, index=False, sheet_name="Cierre_Fiscal")
     excel_data = output.getvalue()
 
-    st.divider()
-    st.warning(
-        "⚠️ **Atención:** Al hacer clic en descargar, la versión de evaluación"
-        " se dará por completada y se bloqueará."
-    )
-
-    btn_descargar = st.download_button(
-        label="📥 Descargar Reporte Completo en Excel (.xlsx)",
+    st.download_button(
+        label="📥 Exportar Reporte en Excel (.xlsx)",
         data=excel_data,
         file_name=(
             f"cierre_fiscal_{datetime.date.today().strftime('%Y_%m')}.xlsx"
@@ -505,11 +408,3 @@ with pestanas[3]:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
     )
-
-    if btn_descargar:
-      bloquear_app()
-      st.success("Reporte generado. La aplicación de prueba se ha bloqueado.")
-      st.rerun()
-
-  else:
-    st.info("Registra al menos un movimiento para ver el consolidado fiscal.")
