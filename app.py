@@ -155,6 +155,7 @@ pestanas = st.tabs([
     "📊 Cierre y Reportes",
 ])
 
+# Lista base de bancos
 BANCOS_VENEZUELA = [
     "Banco de Venezuela (BDV)",
     "Banesco Banco Universal",
@@ -164,8 +165,24 @@ BANCOS_VENEZUELA = [
     "Bancamiga",
     "Banplus",
     "Efectivo / Divisas en Mano",
-    "Otro / Cuenta Internacional",
 ]
+
+# Dentro de la Pestaña 1 (Registro Diario), en la columna del formulario:
+with col1:
+  # Añadimos dinámicamente la opción "Otro (Especificar)"
+  banco_opcion = st.selectbox(
+      "🏦 Banco / Cuenta", BANCOS_VENEZUELA + ["Otro (Especificar)"]
+  )
+
+  # Si selecciona "Otro", habilitamos un cajón de texto libre
+  if banco_opcion == "Otro (Especificar)":
+    banco_seleccionado = st.text_input(
+        "Escriba el nombre del Banco / Entidad:"
+    )
+    if not banco_seleccionado:
+      banco_seleccionado = "Banco Personalizado"
+  else:
+    banco_seleccionado = banco_opcion
 
 # ---------------------------------------------------------
 # PESTAÑA 1: REGISTRO DIARIO
